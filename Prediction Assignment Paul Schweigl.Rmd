@@ -1,0 +1,171 @@
+#**Prediction Assignment Paul Schweigl**
+
+Please note that I hid the output of some few functions so that the assignment is not that long.
+
+##Importing the Data
+
+I import the training and testing data. The testing data is named validation here, since I will split the training set into training and testing to evaluate my model and eventually test the best model on the validation set.
+
+```{r Importing data}
+train.data <- read.csv(url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"), header = TRUE)
+validation <- read.csv(url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"), header = TRUE)
+dim(train.data); dim(validation)
+str(train.data)
+```
+
+##Cleaning the Data
+
+I remove all useless variables that have either no variance, few data points or many NAs.
+
+```{r Cleaning the Data}
+library(caret)
+# I eliminate all variables with lots of NAs or empty cells
+empty.var <- which(colSums(is.na(train.data) |train.data =="") >0.95*dim(train.data)[1])
+train.data.c <- train.data[,-empty.var]
+#I also eliminate the first 7 variables as they do not have a predictive power on the type of exercise
+train.data.c <- train.data.c[,-c(1:7)]
+#I check whether any variables' variance is near zero
+zero.var <- nearZeroVar(train.data.c)
+zero.var #no variance is near zero
+#I do the same for the validation data set
+empty.var2 <- which(colSums(is.na(validation) |validation =="")>0.95*dim(validation)[1])
+validation.c <- validation[,-empty.var]
+validation.c <- validation.c[,-c(1:7)]
+```
+
+##Data Partition into test and training set
+
+I am creating my training (75% of data) and testing (25% of data) set here.
+
+```{r}
+library(caret)
+set.seed(54321)
+inTrain <- createDataPartition(train.data.c$classe, 
+                               p =0.75, list =FALSE)
+training <- train.data.c[inTrain,]
+testing <- train.data.c[-inTrain,]
+dim(training); dim(testing)
+```
+
+##Processing with Principal Component Analysis (PCA)
+
+Since I have several explanatory variables, I want to check whether I can find high correlation (0.8) between them.
+
+```{r, eval=FALSE}
+cor.var <- abs(cor(training[,-53]))
+diag(cor.var) <- 0 # make correlation of variables with themselves 0 
+which(cor.var > 0.8, arr.ind = TRUE)
+dim(cor.var)[1]
+```
+```{r}
+library(corrplot)
+correlogram <- cor(training[, -53])
+corrplot(correlogram, order = "hclust", method = "square", type = "full", 
+         tl.cex = 0.2, tl.col = rgb(1, 1, 1),mar = c(1, 1, 1, 1), title = "Variables Correlogram")
+```
+
+
+Since I have some high correlation, I will deal with that through a principal component analysis (PCA), by making it part of the training process through 'preProcess = "pca"' in the train function. 
+
+##Cross validation
+
+As indicated in the task sheet, I apply Cross-Validation to avoid overfitting and increase model efficiency. I will incoporate Cross-Validation in my model training through trControl.
+
+```{r}
+cv.control <- trainControl(method = "cv", number = 5)
+```
+
+##Prediction Methodology and Model Selection
+
+I will first train 3 models on the training data set and then evaluate their prediction accuracy on the testing set. Eventually, I will choose the best model to predict the "classe" variable in my validation data set.
+
+Out of the 3 models, I chose Random Forest and Boosting as those two are among the top-performing algorithms. My 3rd model will be Predicting with Trees (Classification Tree) as I believe that this model gives a good overview about the relative importance of explanatory variables.
+
+##Model training and prediction
+
+Since all my chosen models are non-linear models, data transformation might be less important. I still tried to train my models with PCA (the addition of preProcessing = "pca" in the "train" function), but this lead to worse outcomes (lower accuracy). Therefore, I only include the results without PCA in this file (I assume since many of the explantory variables were highly correlated, PCA eliminated too many variables overall, deteriorating my models' effectiveness in this case).
+
+###*Random Forest*
+
+Testing and model prediction on test set
+
+```{r}
+library(caret); library (randomForest)
+#train the Random Forest model
+set.seed(54321)
+Mod.rf <- train(classe ~ ., data = training, method = "rf",
+                trControl = cv.control, verbose = FALSE)
+#look at one specific tree
+#getTree(Mod.rf$finalModel, k=3) 
+
+#predict with random forest model on data set
+pred.rf <- predict(Mod.rf, newdata = testing)
+#check model accurary
+rf.cm <- confusionMatrix(testing$classe, pred.rf)
+
+plot(Mod.rf$finalModel, main = "Model Improvement for each additional tree")
+```
+
+In the chart, we can see that the prediction error initially decreases significantly with each additional tree. However, after approximately the 25th tree, all additional trees do not add that much value to the model any more. 
+
+###*Boosting* 
+
+Testing and model prediction on test set
+
+```{r}
+set.seed(54321)
+mod.gbm <- train(classe ~ ., data = training, method = "gbm", trControl = cv.control, verbose = FALSE)
+
+pred.gbm <- predict(mod.gbm, newdata = testing)
+gbm.cm <- confusionMatrix(testing$classe, pred.gbm)
+
+plot(mod.gbm)
+```
+
+###*Predicting with trees*
+
+Testing and model prediction on test set
+
+```{r}
+set.seed(54321)
+mod.pwt <- train(classe ~ ., method = "rpart", data = training, trControl = cv.control)
+library(rattle)
+fancyRpartPlot(mod.pwt$finalModel)
+
+pred.pwt <- predict(mod.pwt, newdata = testing)
+pwt.cm <- confusionMatrix(testing$classe, pred.pwt)
+```
+
+##Model comparison
+
+Looking at the different confusion matrices, we can clearly see that Random Forest and Boosting perform really well  (Accuracy > 0.95) as opposed to my Classification tree (pwt) (Accuracy < 0.5). Especically, the sensitivity (percent of predicted true positives out of all true positives) appears to be really bad in the Classification tree.
+
+The best model is the Random forrest. It has the highest accurarcy (>0.99), the highest Kappa (>0.98; a statistical measure of inter-rater reliability) and also scores best in other indicators such as Specificity or Sensitivity among the categories (A,B,C,D,E). Therefore, I will use the random forest  model to make my prediction on the validation dataset.
+
+```{r}
+rf.cm
+gbm.cm
+pwt.cm
+```
+
+##Prediction on validation data set
+
+```{r}
+pred.val <- predict(Mod.rf, newdata = validation)
+pred.val
+```
+
+
+##Expected prediction error
+
+The prediction error is composed of irreducible error, bias and variance. Since I applied the Random Forrest model to predict on my validation data set, my expected prediction error is based on the performance of that model. 
+
+Overall, I expect the prediction error to be very low and my rf model to be highly accurate. Accuracy, Sensitivity and Specificity are all at least above 0.975 for all categories (A,B,C,D,E). The Kappa, a measure for inter-rater agreement is also very high (0.988). This is all indicates that my predictions are likely to hardly vary from the true values.
+
+In terms of bias, I combat bias by doing cross-validation when training my model. Since I initially eliminate some variables that hardly vary, the bias from excluding them should be negligible. I eventually don't use PCA in my models, keeping more variables and having less bias (compared to models with PCA).
+
+It must also be noted that I do supervised prediction here and hence only have an error in prediction building (no cluster building error).
+
+To sum up, I expect the prediction error on the validation data set to be very low. 
+
+
